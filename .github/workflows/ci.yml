@@ -3,53 +3,137 @@ name: BookSwap CI
 on:
   push:
     branches: [main]
-
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bookswap-ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  backend:
+    name: Backend Tests (PyTest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install backend dependencies
+        working-directory: backend
+        run: python -m pip install -r requirements.txt
+      - name: Run isolated API tests
+        working-directory: backend
+        run: python -m pytest -v --junitxml=reports/pytest.xml
+      - name: Upload PyTest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-results
+          path: backend/reports/
+          if-no-files-found: ignore
 
   frontend:
     name: Frontend Build
     runs-on: ubuntu-latest
-
+    timeout-minutes: 10
+    env:
+      CYPRESS_INSTALL_BINARY: '0'
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
-
+      - name: Lint frontend and tests
+        working-directory: frontend
+        run: npm run lint
       - name: Build frontend
         working-directory: frontend
         run: npm run build
+      - name: Check Cypress TypeScript
+        working-directory: frontend
+        run: npm run test:e2e:types
 
-
-  backend:
-    name: Backend Tests
+  e2e:
+    name: Browser Tests (Cypress + PostgreSQL)
     runs-on: ubuntu-latest
-
+    timeout-minutes: 20
+    needs: [backend, frontend]
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          python-version: '3.12'
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Start isolated application stack
+        run: docker compose -p bookswap-e2e -f compose.e2e.yaml up --build -d --wait --wait-timeout 180
+      - name: Run browser tests
+        uses: cypress-io/github-action@v6
+        with:
+          working-directory: frontend
+          browser: chrome
+          command: npm run test:e2e
+      - name: Save container logs
+        if: always()
+        run: |
+          mkdir -p reports
+          docker compose -p bookswap-e2e -f compose.e2e.yaml logs --no-color > reports/e2e-containers.log 2>&1
+      - name: Upload Cypress evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cypress-results
+          path: |
+            frontend/cypress/results/
+            frontend/cypress/screenshots/
+            frontend/cypress/videos/
+            reports/e2e-containers.log
+          if-no-files-found: ignore
+      - name: Stop test stack
+        if: always()
+        run: docker compose -p bookswap-e2e -f compose.e2e.yaml down --volumes --remove-orphans
 
-      - name: Install backend dependencies
-        working-directory: backend
-        run: pip install -r requirements.txt
+  terraform:
+    name: Terraform Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.17.2'
+          terraform_wrapper: false
+      - name: Check formatting
+        run: terraform fmt -check -recursive
+      - name: Initialize providers for validation
+        run: terraform init -backend=false
+      - name: Validate infrastructure configuration
+        run: terraform validate
 
-      - name: Run backend tests
-        working-directory: backend
-        run: python -m pytest
+  containers:
+    name: Build Application Containers
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [backend, frontend, e2e, terraform]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check deployable images
+        env:
+          POSTGRES_PASSWORD: ci_build_only_password
+        run: docker compose -f compose.production.yaml build

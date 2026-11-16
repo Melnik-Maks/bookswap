@@ -1,0 +1,40 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: bookswap_test
+      POSTGRES_USER: bookswap_test
+      POSTGRES_PASSWORD: test_only_password
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bookswap_test -d bookswap_test"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg2://bookswap_test:test_only_password@db:5432/bookswap_test
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "127.0.0.1:${E2E_PORT:-8082}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/api/health"]
+      interval: 2s
+      timeout: 5s
+      retries: 30

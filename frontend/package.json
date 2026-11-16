@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:e2e": "cypress run --browser chrome",
+    "test:e2e:open": "cypress open",
+    "test:e2e:types": "tsc --project cypress/tsconfig.json"
   },
   "dependencies": {
     "react": "^19.2.8",
@@ -19,6 +22,7 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@vitejs/plugin-react": "^6.1.1",
+    "cypress": "16.3.0",
     "eslint": "^10.10.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.6",

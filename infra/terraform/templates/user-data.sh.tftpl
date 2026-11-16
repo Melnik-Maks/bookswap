@@ -1,0 +1,57 @@
+#!/bin/bash
+set -euo pipefail
+umask 077
+
+dnf install -y docker git openssl
+systemctl enable --now docker
+
+# Building Node.js containers on a 1 GiB lab instance needs extra memory.
+if [ "$(awk '/MemTotal/ { print $2 }' /proc/meminfo)" -lt 1500000 ]; then
+  fallocate -l 2G /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
+COMPOSE_VERSION="v2.40.3"
+mkdir -p /usr/local/lib/docker/cli-plugins
+cd /tmp
+curl --fail --location --retry 5 \
+  "https://github.com/docker/compose/releases/download/$${COMPOSE_VERSION}/docker-compose-linux-x86_64" \
+  --output docker-compose-linux-x86_64
+curl --fail --location --retry 5 \
+  "https://github.com/docker/compose/releases/download/$${COMPOSE_VERSION}/docker-compose-linux-x86_64.sha256" \
+  --output docker-compose-linux-x86_64.sha256
+sha256sum --check docker-compose-linux-x86_64.sha256
+install -m 0755 docker-compose-linux-x86_64 /usr/local/lib/docker/cli-plugins/docker-compose
+
+git clone --depth 1 --branch '${repository_ref}' '${repository_url}' /opt/bookswap
+cd /opt/bookswap
+test -f compose.production.yaml
+
+# Generate the database credential on the instance: it is never a Terraform input.
+printf 'POSTGRES_PASSWORD=%s\nHTTP_PORT=80\n' "$(openssl rand -hex 32)" > .env
+chmod 600 .env
+
+cat > /etc/systemd/system/bookswap.service <<'UNIT'
+[Unit]
+Description=BookSwap Docker Compose application
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/bookswap
+ExecStart=/usr/bin/docker compose --env-file /opt/bookswap/.env -f /opt/bookswap/compose.production.yaml up --build --wait --wait-timeout 600
+ExecStop=/usr/bin/docker compose --env-file /opt/bookswap/.env -f /opt/bookswap/compose.production.yaml stop
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+systemctl daemon-reload
+systemctl enable --now bookswap.service

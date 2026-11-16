@@ -1,0 +1,6 @@
+aws_region     = "us-east-1"
+environment    = "dev"
+instance_type  = "t3.micro"
+repository_url = "https://github.com/Melnik-Maks/bookswap.git"
+repository_ref = "main"
+http_cidr      = "0.0.0.0/0"

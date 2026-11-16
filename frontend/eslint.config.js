@@ -19,4 +19,10 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  {
+    files: ['cypress/**/*.ts'],
+    languageOptions: {
+      globals: { ...globals.mocha, cy: 'readonly', expect: 'readonly' },
+    },
+  },
 ])
